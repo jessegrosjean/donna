@@ -172,7 +172,21 @@ module.exports = class Metadata
     classNode = _.find(@classes, (clazz) -> clazz.getFullName() == className)
 
     for subExp in exp.body.expressions
-      switch subExp.constructor.name
+      subExpName = subExp.constructor.name
+      subExpVariableName = subExp.variable?.base?.value
+
+      # Detect get/set properties of the form: `get testProp: -> @_testProp`
+      # When found set set propertyCase flag and set subExp to the `testProp:
+      # -> @_testProp` part. Will initially get processed as a "Value" and
+      # with type 'function'. But if propertyCase flag is set will change
+      # Value type to primative so its processed through docs as a primative.
+      propertyCase = false
+      if (subExpVariableName is 'get' or subExpVariableName is 'set') and subExp.args.length is 1 and subExp.args[0].constructor.name is 'Value'
+        propertyCase = true
+        subExp = subExp.args[0]
+        subExpName = subExp.constructor.name
+
+      switch subExpName
         # case Prototype-level methods (this.foo = (foo) -> ...)
         when 'Assign'
           value = @eval(subExp.value)
@@ -199,6 +213,9 @@ module.exports = class Metadata
                 name = name.slice(0) if name.reserved
 
                 value = @eval(prototypeExp.value)
+
+                if value.type is 'function' and propertyCase
+                  value.type = 'primitive'
 
                 if value.constructor?.name is 'Value'
                   lookedUpVar = @defs[value.base.value]
@@ -244,8 +261,16 @@ module.exports = class Metadata
 
                 # apply the reference (if one exists)
                 if value.type is "primitive"
-                  variable = _.find classNode?.getVariables(), (variable) -> variable.name == value.name
-                  value.doc = variable?.doc.comment
+                  if propertyCase
+                    # find the matching property from the parsed files
+                    property = _.find classNode?.properties, (property) -> property.name == value.name
+                    value.doc = property?.doc.comment
+                    value.setter = property?.setter
+                    value.getter = property?.getter
+                  else
+                    # find the matching variable from the parsed files
+                    variable = _.find classNode?.getVariables(), (variable) -> variable.name == value.name
+                    value.doc = variable?.doc.comment
                 else if value.type is "function"
                   # find the matching method from the parsed files
                   func = _.find classNode?.getMethods(), (method) -> method.name == value.name
